@@ -1,6 +1,13 @@
+import json
 import pymysql
+import calendar
+import requests
 import pandas as pd
+from threading import Timer
+from io import StringIO
 from datetime import datetime
+from urllib.request import urlopen
+from bs4 import BeautifulSoup
 
 class DBUpdater:
     def __init__(self):
@@ -72,6 +79,91 @@ class DBUpdater:
                 self.conn.commit()
                 print('')
 
+    def read_naver(self, code, company, pages_to_fetch):
+        #네이버에서 주식 시세를 읽어서 데이터프레임으로 변환
+        headers = {'User-agent': 'Mozilla/5.0'}
+        try:
+            url = f"http://finance.naver.com/item/sise_day.nhn?code={code}"
+            req = requests.get(url=url, headers=headers)
+            if req is None:
+                return None
+
+            html = BeautifulSoup(req.text, 'html.parser')
+            pgrr = html.find("td", class_="pgRR")
+
+            if pgrr is None:
+                return None
+
+            s = str(pgrr.a["href"]).split('=')
+            lastpage = s[-1]
+
+            df = pd.DataFrame()
+            pages = min(int(lastpage), pages_to_fetch)
+
+            for page in range(1, pages + 1):
+                pg_url = '{}&page={}'.format(url, page)
+                pg_req = requests.get(url=pg_url, headers=headers)
+                readhtml = pd.read_html(StringIO(pg_req.text), header=0)[0]
+                df = pd.DataFrame(readhtml)
+                tmnow = datetime.now().strftime('%Y-%m-%d %H:%M')
+                print('[{}] {} ({}) : {:04d}/{:04d} pages are downloading...'.format(tmnow, company, code, page, pages), end="\r")
+
+            df = df.rename(columns={'날짜': 'date', '종가': 'close', '전일비': 'diff', '시가': 'open', '고가': 'high', '저가': 'low', '거래량': 'volume'})
+            df['date'] = df['date'].replace('.', '-')
+            df = df.dropna()
+            df[['close', 'diff', 'open', 'high', 'low', 'volume']] = df[['close', 'diff', 'open', 'high', 'low', 'volume']].astype(int)
+            df = df[['date', 'open', 'high', 'low', 'close', 'diff', 'volume']]
+
+        except Exception as e:
+            print('Exception occured :', str(e))
+            return None
+        return df
+
+    def replace_into_db(self, df, num, code, company):
+        #읽어온 주식 시세를 DB에 저장
+        with self.conn.cursor() as curs:
+            for r in df.itertuples():
+                sql = f"REPLACE INTO daily_price VALUES ('{code}', '{r.date}', {r.open}, {r.high}, {r.low}, {r.close}, {r.diff}, {r.volume})"
+                curs.execute(sql)
+            self.conn.commit()
+            print('[{}] #{:04d} {} ({}) : {} rows > REPLACE INTO daily price [OK]'.format(datetime.now().strftime('%Y-%m-%d %H: %M'), num+1, company, code, len(df)))
+
+    def update_daily_price(self, pages_to_fetch):
+        #KRX 상장법인의 주식 시세를 네이버로부터 읽어서 DB에 업데이트
+        for idx, code in enumerate(self.codes):
+            df = self.read_naver(code, self.codes[code], pages_to_fetch)
+            if df is None:
+                continue
+            self.replace_into_db(df, idx, code, self.codes[code])
+
+    def execute_daily(self):
+        self.update_comp_info()
+        try:
+            with open('config.json', 'r') as in_file:
+                config = json.load(in_file)
+                pages_to_fetch = config['pages_to_fetch']
+        except FileNotFoundError:
+            with open('config.json', 'w') as out_file:
+                pages_to_fetch = 100
+                config = {'pages_to_fetch' : 1}
+                json.dump(config, out_file)
+        self.update_daily_price(pages_to_fetch)
+
+        tmnow = datetime.now()
+        lastday = calendar.monthrange(tmnow.year, tmnow.month)[1]
+        if tmnow.month == 12 and tmnow.day == lastday:
+            tmnext = tmnow.replace(year=tmnow.year+1, month=1, day=1, hour=17, minute=0, second=0)
+        elif tmnow.day == lastday:
+            tmnext = tmnow.replace(month=tmnow.month+1, day=1, hour=17, minute=0, second=0)
+        else:
+            tmnext = tmnow.replace(day=tmnow.day+1, hour=17, minute=0, second=0)
+        tmdiff = tmnext - tmnow
+        secs = tmdiff.seconds
+
+        t = Timer(secs, self.execute_daily)
+        print("Waiting for next update ({}) ... ".format(tmnext.strftime ('%Y-%m-%d %H:%M')))
+        t.start()
+
 if __name__ == '__main__':
     dbu = DBUpdater()
-    dbu.update_comp_info()
+    dbu.execute_daily()
