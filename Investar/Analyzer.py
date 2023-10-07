@@ -67,7 +67,7 @@ class MarketDB:
             if end_day < 1 or end_day > 31:
                 print(f"ValueError: end_day({end_day:d}) is wrong.")
                 return
-            start_date = f"{end_year:04d}-{end_month:02d}-{end_day:02d}"
+            end_date = f"{end_year:04d}-{end_month:02d}-{end_day:02d}"
 
         codes_keys = list(self.codes.keys())
         codes_values = list(self.codes.values())
