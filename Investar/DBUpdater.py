@@ -104,7 +104,7 @@ class DBUpdater:
                 pg_url = '{}&page={}'.format(url, page)
                 pg_req = requests.get(url=pg_url, headers=headers)
                 readhtml = pd.read_html(StringIO(pg_req.text), header=0)[0]
-                df = pd.DataFrame(readhtml)
+                df = pd.concat([df, readhtml])
                 tmnow = datetime.now().strftime('%Y-%m-%d %H:%M')
                 print('[{}] {} ({}) : {:04d}/{:04d} pages are downloading...'.format(tmnow, company, code, page, pages), end="\r")
 
@@ -141,7 +141,7 @@ class DBUpdater:
         try:
             with open('config.json', 'r') as in_file:
                 config = json.load(in_file)
-                pages_to_fetch = config['pages_to_fetch']
+                pages_to_fetch = 100#config['pages_to_fetch']
         except FileNotFoundError:
             with open('config.json', 'w') as out_file:
                 pages_to_fetch = 100
